@@ -1,7 +1,7 @@
 import sys
 import re
 import time
-import os  # রেন্ডার সার্ভারের পরিবেশ চেনার জন্য জরুরি
+import os
 import asyncio
 import aiohttp
 from flask import Flask, render_template_string, request, jsonify
@@ -9,7 +9,6 @@ from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-# প্রফেশনাল এবং রেসপনসিভ ইউজার ইন্টারফেস ডিজাইন (HTML/CSS)
 HTML_DESIGN = """
 <!DOCTYPE html>
 <html lang="en">
@@ -32,7 +31,7 @@ HTML_DESIGN = """
         <div class="row justify-content-center">
             <div class="col-md-10">
                 <div class="card p-4 mb-4">
-                    <h2 class="text-center text-primary mb-2">📊 Enterprise FB Auditor v1.0</h2>
+                    <h2 class="text-center text-primary mb-2">📊 Enterprise FB Auditor v1.1</h2>
                     <p class="text-muted text-center mb-4">Bulk Facebook Profile Status & Metric Identifier</p>
                     
                     <div class="mb-3">
@@ -141,7 +140,6 @@ HTML_DESIGN = """
 </html>
 """
 
-# প্যারালাল এবং হাই-স্পিড চেকিং মেথড
 async def async_check_profile(session, url, cookie_str):
     if "www.facebook.com" in url:
         url = url.replace("www.facebook.com", "mbasic.facebook.com")
@@ -159,9 +157,14 @@ async def async_check_profile(session, url, cookie_str):
         headers['Cookie'] = cookie_str.strip()
 
     try:
-        async with session.get(url, headers=headers, timeout=12) as response:
+        async with session.get(url, headers=headers, timeout=12, allow_redirects=True) as response:
+            # চেক করা হচ্ছে ফেসবুক লগইন পেজে রিডাইরেক্ট করেছে কিনা (নষ্ট আইডির প্রধান লক্ষণ)
+            final_url = str(response.url)
+            if "login" in final_url or "checkpoint" in final_url:
+                return {"status": "Dead / Disabled", "metrics": "N/A (Redirected)"}
+
             if response.status == 404:
-                return {"status": "Dead / Disabled", "metrics": "N/A"}
+                return {"status": "Dead / Disabled", "metrics": "N/A (404)"}
             
             html = await response.text()
             soup = BeautifulSoup(html, 'html.parser')
@@ -169,7 +172,8 @@ async def async_check_profile(session, url, cookie_str):
             page_text_lower = page_text.lower()
             page_title = soup.title.string.lower() if soup.title else ""
 
-            error_keywords = ["page isn't available", "content not found", "not found", "লিংকটি হয়তো ভেঙে গেছে", "এই পৃষ্ঠাটি উপলভ্য নয়", "ছবির লিংকটি হয়তো ভেঙে গেছে"]
+            # অন্যান্য এরর কিওয়ার্ড চেক
+            error_keywords = ["page isn't available", "content not found", "not found", "লিংকটি হয়তো ভেঙে গেছে", "এই পৃষ্ঠাটি উপলভ্য নয়", "ছবির লিংকটি হয়তো ভেঙে গেছে", "log in to facebook"]
             if any(kw in page_text_lower or kw in page_title for kw in error_keywords):
                 return {"status": "Dead / Disabled", "metrics": "N/A"}
 
@@ -218,6 +222,5 @@ def audit_links():
     return jsonify(final_results)
 
 if __name__ == '__main__':
-    # Render-এর নিজস্ব পোর্ট অটো-ডিটেক্ট করার জন্য ডায়নামিক কনফিগারেশন
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
