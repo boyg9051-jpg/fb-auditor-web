@@ -15,7 +15,7 @@ HTML_DESIGN = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enterprise FB Auditor Tool</title>
+    <title>Enterprise FB Auditor Tool v1.2</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f4f6f9; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
@@ -31,12 +31,12 @@ HTML_DESIGN = """
         <div class="row justify-content-center">
             <div class="col-md-10">
                 <div class="card p-4 mb-4">
-                    <h2 class="text-center text-primary mb-2">📊 Enterprise FB Auditor v1.1</h2>
-                    <p class="text-muted text-center mb-4">Bulk Facebook Profile Status & Metric Identifier</p>
+                    <h2 class="text-center text-primary mb-2">📊 Enterprise FB Auditor v1.2</h2>
+                    <p class="text-muted text-center mb-4">Fixed Metric & Cookie Extraction Logic</p>
                     
                     <div class="mb-3">
-                        <label class="form-label fw-bold">ফ্রি সেশন কুকি (Facebook Cookie - ঐচ্ছিক):</label>
-                        <input type="text" id="fbCookie" class="form-control" placeholder="c_user=xxxx; xs=xxxx; fr=xxxx...">
+                        <label class="form-label fw-bold">ফেসবুক সেশন কুকি (Facebook Cookie - অবশই দিন):</label>
+                        <textarea id="fbCookie" class="form-control" rows="2" placeholder="c_user=xxxx; xs=xxxx; fr=xxxx..."></textarea>
                     </div>
 
                     <div class="mb-3">
@@ -141,16 +141,17 @@ HTML_DESIGN = """
 """
 
 async def async_check_profile(session, url, cookie_str):
+    # স্ক্র্যাপিং এর জন্য m.facebook ব্যবহার করছি কারণ mbasic ইদানীং ব্লক করছে বেশি
     if "www.facebook.com" in url:
-        url = url.replace("www.facebook.com", "mbasic.facebook.com")
-    elif "m.facebook.com" in url:
-        url = url.replace("m.facebook.com", "mbasic.facebook.com")
-    elif "mbasic.facebook.com" not in url and url.strip():
+        url = url.replace("www.facebook.com", "m.facebook.com")
+    elif "mbasic.facebook.com" in url:
+        url = url.replace("mbasic.facebook.com", "m.facebook.com")
+    elif "m.facebook.com" not in url and url.strip():
         if not url.startswith("http"):
-            url = "https://mbasic.facebook.com/" + url
+            url = "https://m.facebook.com/" + url
 
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9'
     }
     if cookie_str.strip():
@@ -158,7 +159,6 @@ async def async_check_profile(session, url, cookie_str):
 
     try:
         async with session.get(url, headers=headers, timeout=12, allow_redirects=True) as response:
-            # চেক করা হচ্ছে ফেসবুক লগইন পেজে রিডাইরেক্ট করেছে কিনা (নষ্ট আইডির প্রধান লক্ষণ)
             final_url = str(response.url)
             if "login" in final_url or "checkpoint" in final_url:
                 return {"status": "Dead / Disabled", "metrics": "N/A (Redirected)"}
@@ -172,20 +172,36 @@ async def async_check_profile(session, url, cookie_str):
             page_text_lower = page_text.lower()
             page_title = soup.title.string.lower() if soup.title else ""
 
-            # অন্যান্য এরর কিওয়ার্ড চেক
-            error_keywords = ["page isn't available", "content not found", "not found", "লিংকটি হয়তো ভেঙে গেছে", "এই পৃষ্ঠাটি উপলভ্য নয়", "ছবির লিংকটি হয়তো ভেঙে গেছে", "log in to facebook"]
+            # এরর কিওয়ার্ড হ্যান্ডেলিং
+            error_keywords = ["page isn't available", "content not found", "not found", "লিংকটি হয়তো ভেঙে গেছে", "এই পৃষ্ঠাটি উপলভ্য নয়", "log in"]
             if any(kw in page_text_lower or kw in page_title for kw in error_keywords):
                 return {"status": "Dead / Disabled", "metrics": "N/A"}
 
-            friends_match = re.search(r'([\d.,\dKkMমববিি]+)\s*(friends|friend|mutual friends|বন্ধু|পারস্পরিক বন্ধু)', page_text, re.IGNORECASE)
-            followers_match = re.search(r'([\d.,\dKkMমববিি]+)\s*(followers|follower|ফলোয়ার)', page_text, re.IGNORECASE)
+            # মেথড ১: নির্দিষ্ট মোবাইল ফ্রেন্ডস লিংক বা কন্টেইনার খোঁজা (অত্যন্ত নিখুঁত)
+            friends_element = soup.find(text=re.compile(r'friends', re.IGNORECASE))
+            if not friends_element:
+                friends_element = soup.find(text=re.compile(r'বন্ধু', re.IGNORECASE))
+                
+            if friends_element:
+                # আশেপাশের টেক্সট থেকে সংখ্যা আলাদা করা
+                parent_text = friends_element.parent.get_text() if friends_element.parent else friends_element
+                match = re.search(r'([\d.,\dKkMমববিি]+)', parent_text)
+                if match:
+                    return {"status": "✅ Live", "metrics": f"Friends: {match.group(1)}"}
+
+            # মেথড ২: স্ট্যান্ডার্ড রেগুলার এক্সপ্রেশন (ব্যাকআপ লজিক)
+            friends_match = re.search(r'([\d.,]+)\s*(friends|friend|mutual friends|বন্ধু)', page_text, re.IGNORECASE)
+            followers_match = re.search(r'([\d.,]+)\s*(followers|follower|ফলোয়ার)', page_text, re.IGNORECASE)
 
             if friends_match:
                 return {"status": "✅ Live", "metrics": f"Friends: {friends_match.group(1)}"}
             elif followers_match:
                 return {"status": "✅ Live", "metrics": f"Followers: {followers_match.group(1)}"}
             else:
-                return {"status": "✅ Live", "metrics": "0 Friends / Profile Locked"}
+                # পেজে প্রোফাইলের নাম থাকলে আইডি লাইভ, কিন্তু ফ্রেন্ড লিস্ট লক করা বা হাইড করা
+                if len(page_title) > 0 and "facebook" not in page_title:
+                    return {"status": "✅ Live", "metrics": "Hidden / Locked Profile"}
+                return {"status": "✅ Live", "metrics": "0 Friends"}
     except Exception:
         return {"status": "Rate Limited / Error", "metrics": "Retry"}
 
